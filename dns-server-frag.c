@@ -180,6 +180,8 @@ ra_mac()
 {
   int sd;
   int ifindex;
+  int len;
+  int i;
   uint8_t *inpack;
   struct msghdr msghdr;
   struct iovec iov[2];
