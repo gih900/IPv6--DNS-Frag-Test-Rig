@@ -87,7 +87,8 @@ int sd ;
 char *target, *src_ip, *dst_ip ;
 uint8_t *data, *ether_frame ;
 int dst_mac_set = 0 ;
-
+int debug = 0 ;
+int dontfrag = 1 ;
 char *allocate_strmem (int);
 
 /* 
@@ -567,6 +568,36 @@ respond(struct response *dns_response, struct sockaddr_in6 *srcaddr, struct sock
   /* calculate the UDP checksum */  
   uhdr->uh_sum = udp_checksum(uhdr,dns_response->len + 8, &srcaddr->sin6_addr, &cliaddr->sin6_addr);
 
+  if (dontfrag) {
+    // Destination and Source MAC addresses 
+    memcpy(ether_frame, dst_mac, 6 * sizeof (uint8_t)); 
+    memcpy(ether_frame + 6, src_mac, 6 * sizeof (uint8_t)); 
+ 
+    // Next is ethernet type code (ETH_P_IPV6 for IPv6). 
+    // http://www.iana.org/assignments/ethernet-numbers 
+    ether_frame[12] = ETH_P_IPV6 / 256;   
+    ether_frame[13] = ETH_P_IPV6 % 256; 
+
+    iphdr->ip6_nxt = 17; 
+    datalen = dns_response->len ;
+    iphdr->ip6_plen = htons(datalen + 8); 
+
+    /* now assemble the ether frame */    
+    frame_length = 6 + 6 + 2 + 40 + 8 + datalen;
+ 
+    /* IPv6 header + frag header */
+    memcpy (ether_frame + ETH_HDRLEN, iphdr, 40); 
+    
+    /* payload fragment */
+    memcpy (ether_frame + ETH_HDRLEN + 40, payload, datalen + 8); 
+
+    // Send ethernet frame to socket. 
+    if ((bytes = sendto (sd, ether_frame, frame_length, 0, (struct sockaddr *) &device, sizeof (device))) <= 0) { 
+      perror ("sendto() failed"); 
+      exit (EXIT_FAILURE); 
+      } 
+    return(1) ;
+    }
   /* now fragment the output */
   /* set up the frag header */
   fhdr = (struct ip6_frag *) &out_packet_buffer[40];
@@ -719,7 +750,7 @@ int main(int argc, char **argv)
   dns = "8.8.8.8";
   
 
-  while (((ch = getopt(argc,argv, "i:m:p:d:l:"))) != -1) {
+  while (((ch = getopt(argc,argv, "i:m:p:d:l:vx"))) != -1) {
     switch(ch) {
       case 'i':
         // interface name of 'listen' address
@@ -746,6 +777,13 @@ int main(int argc, char **argv)
 
       case 'd':
         dns = strdup(optarg) ;
+        break ;
+
+      case 'v':
+        debug = 1 ;
+        break ;
+      case 'x':
+        dontfrag = 1 ;
         break ;
 
       default:
@@ -807,12 +845,22 @@ int main(int argc, char **argv)
       exit(1);
       }
 
+    if (debug) 
+      printf("Received query\n") ;
+ 
     /* pass the packet to the back-end server and get the response */
     if (server_request(buf, rc))
       continue;
-      
+   
+
+    if (debug)
+      printf("passed query to back end and picked up response\n") ;
+   
     /* write the response back to the original sender */  
     respond(&dns_response,&listen,cliaddr) ;
+
+    if (debug) 
+      printf("responded to client\n") ;
     }
     
   /* can't get here, but just in case: close sockets */
